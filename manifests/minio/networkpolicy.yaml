@@ -20,3 +20,26 @@ spec:
       ports:
         - protocol: TCP
           port: 9000
+---
+# egress side: pods that need to reach MinIO must also be allowed to leave -
+# default-deny blocks both directions independently, so the ingress rule
+# above alone isn't enough
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-minio
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app: minio-bucket-job
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - protocol: TCP
+          port: 9000
