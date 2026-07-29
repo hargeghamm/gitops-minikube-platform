@@ -12,8 +12,11 @@
 #   -------------------------------------------------------------------------
 #   worst-case total                     560m/848Mi           2550m/2112Mi
 #
-# Quota below leaves roughly 2x headroom over that worst case so a rollout
-# or a real HPA scale-up never gets rejected by the quota itself.
+# Quota below leaves headroom over that worst case, but not evenly: ~1.8x on
+# requests.cpu, ~1.4x on both memory dimensions, and only ~1.2x on
+# limits.cpu - that last one is the tightest margin and the one to widen
+# first if anything else ever needs to run in this namespace (a debug pod,
+# a one-off Job) while the HPA and a rollout are both maxed out at once.
 apiVersion: v1
 kind: ResourceQuota
 metadata:
