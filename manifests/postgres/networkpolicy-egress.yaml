@@ -1,0 +1,39 @@
+# Egress the CNPG-managed Postgres pods need beyond DNS (DNS is covered
+# namespace-wide by manifests/api/networkpolicy-dns-egress.yaml):
+#  - the Kubernetes API server, because each instance's manager reports
+#    cluster/replication status and participates in leader election directly
+#    against the apiserver, not through a sidecar
+#  - each other, for streaming replication
+#  - MinIO, for WAL archiving and base backups via barman-cloud
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-egress
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: postgres
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.96.0.1/32
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - protocol: TCP
+          port: 9000

@@ -1,19 +1,22 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-egress-to-postgres
+  name: allow-ingress-to-minio
   namespace: app
 spec:
   podSelector:
     matchLabels:
-      app: api
+      app: minio
   policyTypes:
-    - Egress
-  egress:
-    - to:
+    - Ingress
+  ingress:
+    - from:
         - podSelector:
             matchLabels:
               cnpg.io/cluster: postgres
+        - podSelector:
+            matchLabels:
+              app: minio-bucket-job
       ports:
         - protocol: TCP
-          port: 5432
+          port: 9000

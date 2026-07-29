@@ -1,0 +1,40 @@
+# Runs once per sync as an ArgoCD hook, after MinIO is healthy, to create the
+# bucket CloudNativePG backs up into. MinIO doesn't auto-create buckets on
+# first write, so something has to. Modeled as a PostSync hook rather than a
+# tracked resource: it's a one-shot action, not desired state, and HookSucceeded
+# means ArgoCD cleans it up instead of it lingering as a completed Job forever.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-create-bucket
+  namespace: app
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: minio-bucket-job
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+          envFrom:
+            - secretRef:
+                name: minio-credentials
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mc alias set target http://minio.app.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
+              mc mb --ignore-existing target/postgres-backups
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

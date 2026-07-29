@@ -1,16 +1,16 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: postgres
+  name: minio
   namespace: argocd
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   project: default
   source:
     repoURL: https://github.com/hargeghamm/gitops-minikube-platform.git
     targetRevision: main
-    path: manifests/postgres
+    path: manifests/minio
     directory:
       recurse: true
   destination:

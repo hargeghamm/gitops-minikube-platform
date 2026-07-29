@@ -1,0 +1,27 @@
+# Sized against the actual worst-case simultaneous footprint of everything
+# that can run in this namespace at once, with headroom - not a round number
+# picked at random:
+#
+#   component          replicas (max)   requests (cpu/mem)   limits (cpu/mem)
+#   api                6 (5 HPA + 1      6x 50m/32Mi          6x 200m/128Mi
+#                      rollout surge)    = 300m/192Mi         = 1200m/768Mi
+#   postgres (CNPG)    2                 2x 100m/256Mi        2x 500m/512Mi
+#                                        = 200m/512Mi         = 1000m/1024Mi
+#   minio              1                 50m/128Mi            250m/256Mi
+#   minio-bucket-job   1 (transient)     10m/16Mi             100m/64Mi
+#   -------------------------------------------------------------------------
+#   worst-case total                     560m/848Mi           2550m/2112Mi
+#
+# Quota below leaves roughly 2x headroom over that worst case so a rollout
+# or a real HPA scale-up never gets rejected by the quota itself.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: app-quota
+  namespace: app
+spec:
+  hard:
+    requests.cpu: "1"
+    requests.memory: 1200Mi
+    limits.cpu: "3"
+    limits.memory: 3Gi

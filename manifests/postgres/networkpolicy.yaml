@@ -1,15 +1,19 @@
+# Ingress to the CNPG-managed Postgres pods (primary + replica both carry the
+# cnpg.io/cluster label, so this applies regardless of which pod currently
+# holds which role).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-ingress-to-postgres
+  name: allow-ingress-to-postgres
   namespace: app
 spec:
   podSelector:
     matchLabels:
-      app: postgres
+      cnpg.io/cluster: postgres
   policyTypes:
     - Ingress
   ingress:
+    # the API querying the database
     - from:
         - podSelector:
             matchLabels:
@@ -17,3 +21,22 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # streaming replication between the primary and its replica(s) - whichever
+    # pod is currently the replica initiates this connection to whichever is
+    # currently primary, so the policy is self-referential rather than
+    # role-specific
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # the CNPG operator polls each instance's status/webhook server directly
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - protocol: TCP
+          port: 8000
