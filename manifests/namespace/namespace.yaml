@@ -4,3 +4,10 @@ metadata:
   name: app
   labels:
     name: app
+    # Step 1 of 2: audit+warn only, no enforce yet. Surfaces violations
+    # without blocking anything, so I can verify every workload in this
+    # namespace - including CNPG's operator-managed pods, which I don't
+    # author directly - actually passes "restricted" before flipping
+    # enforce on and risking an admission-rejected pod during a real deploy.
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

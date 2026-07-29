@@ -18,10 +18,26 @@ spec:
       labels:
         app: minio-bucket-job
     spec:
+      automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mc
           image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp/mc-home
           envFrom:
             - secretRef:
                 name: minio-credentials
@@ -31,6 +47,9 @@ spec:
             - |
               mc alias set target http://minio.app.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
               mc mb --ignore-existing target/postgres-backups
+          volumeMounts:
+            - name: mc-home
+              mountPath: /tmp/mc-home
           resources:
             requests:
               cpu: 10m
@@ -38,3 +57,6 @@ spec:
             limits:
               cpu: 100m
               memory: 64Mi
+      volumes:
+        - name: mc-home
+          emptyDir: {}
