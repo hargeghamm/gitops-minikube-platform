@@ -5,7 +5,7 @@ metadata:
   namespace: app
 spec:
   instances: 2
-  imageName: ghcr.io/cloudnative-pg/postgresql@sha256:99be063781d171d3971089b49c992706bdab9ccbd2b57cdf126c7542773aedfe
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.4@sha256:99be063781d171d3971089b49c992706bdab9ccbd2b57cdf126c7542773aedfe
 
   bootstrap:
     initdb:
