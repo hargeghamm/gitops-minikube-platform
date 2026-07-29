@@ -142,6 +142,105 @@ separate credentials (the CNPG owner bootstrap, the API's `DATABASE_URL`, and
 MinIO's root credentials) - the mechanism doesn't get more complex per secret,
 which is part of why it's the right choice at this scale.
 
+Two properties of this setup are worth being explicit about rather than
+leaving implicit:
+
+- **Sealed Secrets ciphertext is bound to the exact namespace + secret name by
+  default** (I didn't pass `--scope`, so the strict default applies). A leaked
+  `SealedSecret` manifest can't be copy-pasted into a different namespace or
+  renamed and still decrypt - it's cryptographically tied to where I actually
+  intended it to land, not just "anything this cluster's key can open."
+- **`DATABASE_URL` as a plain environment variable is the app's contract, not
+  my preference.** Env vars for secrets are a real, commonly-cited anti-pattern
+  (readable via `/proc/<pid>/environ` by anything sharing the container's PID
+  namespace, trivially dumped by `kubectl exec ... env` to anyone with exec
+  RBAC, prone to leaking into crash logs) - mounting as a file is generally
+  better. I didn't get to choose here: the brief specifies the API "reads its
+  connection string from the `DATABASE_URL` environment variable," and I
+  wrote the app to that exact contract. Where I *did* have the choice - CNPG's
+  own bootstrap credential - the operator never exposes it as a container env
+  var at all: it reads the `Secret` via the Kubernetes API directly and
+  applies the password with SQL, so it's never sitting in any container's
+  environment, file, or process listing. That's a real secrets-hygiene
+  advantage of choosing an operator over a hand-rolled StatefulSet that I
+  didn't fully appreciate until I went looking for where CNPG actually
+  consumes that secret.
+
+**The Sealed Secrets controller is itself a high-value target, by design, and
+that's a real tradeoff, not a footnote.** It holds the one private key that
+can decrypt every `SealedSecret` in the cluster and necessarily has broad
+`Secret` read/write RBAC across namespaces to materialize them - meaning
+compromising that one controller is roughly equivalent to compromising every
+secret this cluster manages. This is inherent to the architecture, not a
+misconfiguration I introduced; it's the same tradeoff every "encrypt in git,
+decrypt in-cluster" approach makes, and it's exactly why the key-backup
+question two paragraphs up matters as much operationally as it does for
+disaster recovery.
+
+**Workload hardening: explicit `securityContext` and Pod Security Standards,
+rolled out in a way that wouldn't have let a mistake reach `enforce` blind.**
+Auditing this build specifically for security posture (not just "does it
+work") surfaced a real finding: MinIO was running as **root** (`uid=0`) - the
+official image's default, which I hadn't overridden because I'd only verified
+functionality, not the container's actual identity. Neither the API nor MinIO
+Deployment had any Kubernetes-level `securityContext` at all; the API's
+non-root behavior existed only because the Dockerfile happens to set `USER
+nonroot`, with nothing at the cluster layer to catch a regression if that
+ever changed. I fixed both: explicit `runAsNonRoot`, a specific `runAsUser`,
+`allowPrivilegeEscalation: false`, dropped `ALL` capabilities, and
+`seccompProfile: RuntimeDefault` on api, minio, and the bucket-creation hook
+Job, plus `automountServiceAccountToken: false` on all three - none of them
+talk to the Kubernetes API, so none of them need a token a compromised
+container could try to use against it. Making MinIO non-root meant its PVC
+needed the same `csi-hostpath-driver` StorageClass fix CNPG already needed
+(`fsGroup` doesn't apply to `hostPath` volumes), which meant recreating that
+PVC - fine, since it only held a demo backup, trivially regenerated.
+
+Rather than assert these changes are correct, I rolled out namespace-wide Pod
+Security Standards enforcement in the two steps the safe pattern actually
+calls for: first `audit`+`warn` at the `restricted` level only (non-blocking -
+surfaces violations without rejecting anything), then verified *every*
+workload in the namespace against it by forcing real pod recreation, not just
+reading the labels - a full `api` rollout, deleting MinIO's pod, and (by
+accident, since the primary/replica roles had already swapped from the
+earlier chaos test) two more live CNPG primary failovers. Zero PodSecurity
+violations logged through any of it. Only then did I flip
+`pod-security.kubernetes.io/enforce` to `restricted` and re-ran the same
+recreation tests against actual enforcement, not just audit logging, to
+confirm nothing that had passed the dry run then got rejected for real.
+CNPG's own operator-managed pods, notably, were already fully
+`restricted`-compliant out of the box (non-root, dropped capabilities,
+read-only root filesystem, seccomp) without me touching their spec at all -
+one more real advantage of the operator over anything I'd have hand-rolled.
+
+**Secrets at rest in etcd: a real, documented gap I chose not to close on
+this cluster, and why.** Sealed Secrets protects credentials *in git* - once
+the controller decrypts a `SealedSecret` into a live Kubernetes `Secret`,
+that object is stored in etcd like any other resource, and by default,
+**Kubernetes does not encrypt `Secret` data at rest in etcd** - not on this
+cluster, and not on most default installs. Anyone with direct access to
+etcd's data files (or a snapshot of them) can read every secret in plaintext,
+independent of any RBAC on the Kubernetes API itself. Closing this requires
+an `EncryptionConfiguration` passed to the apiserver via
+`--encryption-provider-config`, ideally using a KMS provider (envelope
+encryption against a real external key management service) rather than the
+weaker built-in `aescbc`/`secretbox` providers, which still leave the
+encryption key sitting on the same control-plane disk as the data it
+protects. I confirmed this gap is real on this specific cluster (`grep
+encryption /etc/kubernetes/manifests/kube-apiserver.yaml` inside the minikube
+VM returns nothing) and confirmed the fix is mechanically feasible - edit the
+static pod manifest, mount a config file, the kubelet restarts the apiserver
+automatically. I chose not to do it live: it means editing the running
+apiserver's manifest on a cluster that already had one unplanned outage this
+session (a laptop sleep took down the whole Colima VM mid-build) and one
+stuck ArgoCD operation I had to manually clear - both fully recovered, but
+real evidence that this specific environment's operational risk isn't
+hypothetical today. This isn't something the brief asks for, and I'd rather
+document a real gap precisely than gamble with a late, disruptive change to
+a working, submission-ready cluster to close it. On a real cluster - or a
+disposable throwaway profile - I'd do it and prove it with a fresh
+`etcdctl` read showing ciphertext.
+
 **Postgres: CloudNativePG, not a raw StatefulSet.**
 I started with a raw StatefulSet - the simplest thing that satisfies "state
 survives a restart" - and it worked. But "survives a pod restart" and "survives
@@ -306,11 +405,23 @@ these gaps:
    wrong moment takes the whole cluster's API server down with it, even
    though Postgres itself would survive. Real HA means a 3-node (or managed)
    control plane.
-3. **Secrets backend is cluster-local.** Sealed Secrets' private key lives
-   only in this cluster. A real secret backend (Vault, cloud KMS + External
-   Secrets Operator) decouples secret material from any one cluster's
-   lifecycle and adds audit logging on every read, which Sealed Secrets
-   doesn't give you.
+3. **Secrets backend is cluster-local, and secrets at rest in etcd aren't
+   encrypted.** Two related but distinct gaps. First: Sealed Secrets' private
+   key lives only in this cluster - a real secret backend (Vault, cloud KMS +
+   External Secrets Operator) decouples secret material from any one
+   cluster's lifecycle and adds audit logging on every read, which Sealed
+   Secrets doesn't give you. Second, and more fundamental: once a
+   `SealedSecret` is decrypted into a live `Secret`, that object sits in etcd
+   in plaintext by default - confirmed on this specific cluster, not assumed
+   (see the security ADR and bug log above). Closing this needs an
+   `EncryptionConfiguration` on the apiserver, ideally KMS-backed envelope
+   encryption rather than the weaker built-in providers. I verified the fix
+   is mechanically straightforward but chose not to apply it live to this
+   already-built cluster given the operational risk of editing a running
+   apiserver's static pod manifest this late - a judgment call, not an
+   oversight, and the first thing I'd do differently starting fresh (bake
+   `--encryption-provider-config` into cluster bring-up from the start,
+   rather than retrofit it).
 4. **No upgrade story.** I pinned Kubernetes, Calico, ArgoCD, CloudNativePG,
    and every image by tag or digest, but there's no tested path for rolling
    any of those forward - no staging cluster to validate a Kubernetes minor
@@ -441,6 +552,33 @@ contrived example:
    schedule string that does what you meant - checking one real firing
    against the wall clock caught this; nothing about the resource's own
    status fields would have.
+10. **MinIO was running as root, and nothing had told me.** I'd verified
+    MinIO functionally (backups worked, restore worked) and never checked
+    what user it actually ran as. It was `uid=0`. Neither the API nor MinIO
+    Deployment had any `securityContext` at all - the API only avoided this
+    because its distroless image's Dockerfile happens to set `USER nonroot`,
+    which the cluster itself was doing nothing to enforce. Fixed by adding
+    explicit `securityContext` to both plus the bucket-creation Job (see the
+    security ADR above), which is exactly the kind of gap "it works" doesn't
+    catch and a deliberate security pass does.
+11. **Recreating a PVC with a different (immutable) `storageClassName`
+    wedged ArgoCD's sync state, and the fix wasn't obvious.** After deleting
+    the old `minio-data` PVC to let it recreate on `csi-hostpath-sc`, ArgoCD's
+    sync got stuck reporting "Detected changes to resource minio-data which
+    is currently being deleted" indefinitely - even after the PVC was
+    actually gone, even after restarting both `argocd-application-controller`
+    and `argocd-redis` to clear any cached live-state view. The operation
+    itself was wedged in the `Application`'s own `.status.operationState`
+    (an automated sync from an older revision, started before my delete,
+    that never resolved). Neither clearing `.spec.operation` nor a fresh
+    sync request unstuck it - what worked was deleting the `Application`
+    object itself (safe here: no cascade finalizer on child apps, only on
+    `root`) and letting the parent app-of-apps recreate it fresh. The
+    lesson: an immutable-field change on a resource ArgoCD manages needs the
+    old object gone *before* the new sync attempt starts, not deleted
+    mid-flight while a previous operation is still resolving against it -
+    and when ArgoCD's own operation state wedges, the reliable fix is
+    recreating the `Application`, not chasing its cache.
 
 ## 7. Runbook: the Postgres primary dies
 
