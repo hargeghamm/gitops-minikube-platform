@@ -55,7 +55,13 @@ metadata:
   name: postgres-nightly
   namespace: app
 spec:
-  schedule: "0 2 * * *"
+  # CNPG's schedule is NOT standard 5-field Kubernetes CronJob syntax - it's
+  # robfig/cron format with a leading seconds field (sec min hour dom month
+  # dow). A 5-field "0 2 * * *" here doesn't mean "2am daily": it gets parsed
+  # as sec=0 min=2 hour=* ..., i.e. every hour at :02:00. Confirmed by
+  # actually seeing a Backup fire at 17:02 instead of 02:00 - not caught by
+  # reading the docs, caught by checking what actually ran.
+  schedule: "0 0 2 * * *"
   backupOwnerReference: self
   cluster:
     name: postgres

@@ -399,6 +399,23 @@ contrived example:
    segment closed first - continuous archiving on a schedule usually papers
    over this in practice, but a backup-then-verify script that doesn't
    account for it will look correct until the one time it isn't.
+9. **`ScheduledBackup`'s cron format has an extra field, and I didn't notice
+   until I checked what actually ran.** I wrote `schedule: "0 2 * * *"`
+   intending "2am daily," which is correct Kubernetes CronJob syntax. CNPG's
+   `ScheduledBackup` uses `robfig/cron` format instead, which prepends a
+   seconds field - so a 5-field schedule doesn't mean what it looks like it
+   means. My schedule was actually parsed as `sec=0 min=2 hour=* ...`, i.e.
+   "every hour at :02:00," not "once a day." I found this by noticing an
+   unexpected `Backup` object named `postgres-nightly-20260729170200` (17:02,
+   not 02:00) sitting in the namespace during this audit, not by re-reading
+   the docs - the docs do state the format difference explicitly, I just
+   hadn't internalized it when I first wrote the schedule. Fixed to the
+   correct 6-field `"0 0 2 * * *"`. The general lesson: a schedule string
+   that's syntactically valid and produces output that looks plausible (it
+   did run, it did complete, the backup was real) is not the same as a
+   schedule string that does what you meant - checking one real firing
+   against the wall clock caught this; nothing about the resource's own
+   status fields would have.
 
 ## 7. Runbook: the Postgres primary dies
 
