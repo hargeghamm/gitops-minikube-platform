@@ -202,35 +202,60 @@ healthy API pods for a problem restarting them doesn't fix.
 The `app` namespace has a `ResourceQuota` sized against the actual worst-case
 simultaneous footprint of everything that can run in it - api at its HPA max
 plus one rollout surge, both CNPG instances, MinIO, and the transient bucket
-job - with roughly 2x headroom over that computed total (the math is in a
-comment in `manifests/namespace/resourcequota.yaml`, not a round number picked
-by feel). The api Deployment's rollout strategy is explicit
+job (the math is in a comment in `manifests/namespace/resourcequota.yaml`, not
+a round number picked by feel). The headroom isn't even across dimensions:
+~1.8x on `requests.cpu`, ~1.4x on both memory dimensions, and only ~1.2x on
+`limits.cpu` - that last one is the tightest margin, and the one I'd widen
+first if this namespace ever needed to run one more transient thing (a debug
+pod, a one-off Job) while the HPA and a rollout were both maxed out
+simultaneously. The api Deployment's rollout strategy is explicit
 (`maxSurge: 1, maxUnavailable: 0`) specifically so a rolling update's extra pod
 never gets rejected by that quota. I proved this isn't just asserted: I
 triggered a real rollout (`kubectl rollout restart deployment/api`) against
 the live quota and it completed cleanly.
 
-**Storage: what the PVC's access mode means, what happens on failure, and
-what actually broke when I first tried this.**
-The Postgres PVCs use `ReadWriteOnce` on `csi-hostpath-driver`'s
-`csi-hostpath-sc` StorageClass - not minikube's default `standard` class. That
-default class matters more than it looks: I originally provisioned CNPG on
-`standard` (the legacy hostpath provisioner) and every instance failed
-`initdb` with `Permission denied` writing to its own data directory.
-Kubernetes explicitly exempts the HostPath volume type from `fsGroup`
-enforcement - a real, documented limitation, not a misconfiguration on my
-part - so a non-root container (which is exactly what CNPG's postgres image
-is) can't be given group-write access to a `standard`-class volume by
+**Storage: the three questions the brief asks for, answered directly.**
+
+*What access mode does the DB volume use, and what does it constrain about
+scheduling?* `ReadWriteOnce`, on `csi-hostpath-driver`'s `csi-hostpath-sc`
+StorageClass - deliberately not minikube's default `standard` class (see the
+bug below). `ReadWriteOnce` means each volume can be mounted by one node at a
+time, which pins that pod to whichever node currently holds it - a Postgres
+instance can't be freely rescheduled elsewhere without its volume following
+it. CNPG's two instances each get their own separate `ReadWriteOnce` volume,
+which is what turns "one node's worth of storage" into real redundancy: they
+aren't forced onto the same node, so one node holding one instance's volume
+doesn't constrain where the other instance's volume lives.
+
+*What happens to the data if the node or pod dies?* Pod dies, same node: the
+StatefulSet-like PVC binding re-attaches the same volume, Postgres replays its
+WAL, no data lost - this is the "raw StatefulSet" case, and I proved it (see
+the Chaos section: two of these). Node dies, taking one instance's volume
+with it: with the old single-instance StatefulSet this replaced, that was
+unrecoverable data loss - one node was the entire cluster's storage. With
+CNPG's 2-instance cluster, the surviving instance (on a different node, with
+its own separate volume) is promoted and keeps serving; the lost node's data
+is gone, but the cluster's data isn't - proved twice by force-killing the
+primary under a live connection.
+
+*How would you back it up and restore it?* CloudNativePG's `ScheduledBackup`
+handles the schedule (continuous WAL archiving plus a nightly base backup to
+MinIO); I didn't stop at configuring this and describing it, I ran it: I took
+a backup, deleted the cluster it came from entirely, and restored a fresh
+`Cluster` from that backup, then confirmed the exact row I'd written
+beforehand was present. That full loop - and the WAL-archiving-timing bug it
+surfaced - is in the Chaos and "real bugs" sections below.
+
+**The bug this surfaced:** I originally provisioned CNPG on minikube's
+default `standard` StorageClass (the legacy hostpath provisioner) and every
+instance failed `initdb` with `Permission denied` writing to its own data
+directory. Kubernetes explicitly exempts the HostPath volume type from
+`fsGroup` enforcement - a real, documented limitation, not a misconfiguration
+on my part - so a non-root container (which is exactly what CNPG's postgres
+image is) can't be given group-write access to a `standard`-class volume by
 Kubernetes' normal mechanism. `csi-hostpath-driver` is a real CSI
 implementation and honors `fsGroup` correctly, which is the actual fix, not a
-workaround. `ReadWriteOnce` still means a volume is mounted by one node at a
-time, and CNPG's replica has its own separate `ReadWriteOnce` volume on a
-(potentially) different node - that's what makes losing one node no longer
-mean losing the data, unlike the single-instance StatefulSet this replaced.
-Backup/restore is no longer a manual `pg_dump` plan I'd have to build myself:
-CloudNativePG's `ScheduledBackup` handles the schedule, and I proved the
-restore path end-to-end (see Chaos and Runbook below) rather than describing
-it as a future step.
+workaround around it.
 
 ## 3. What minikube did for me
 
