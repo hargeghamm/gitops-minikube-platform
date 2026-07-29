@@ -4,10 +4,12 @@ metadata:
   name: app
   labels:
     name: app
-    # Step 1 of 2: audit+warn only, no enforce yet. Surfaces violations
-    # without blocking anything, so I can verify every workload in this
-    # namespace - including CNPG's operator-managed pods, which I don't
-    # author directly - actually passes "restricted" before flipping
-    # enforce on and risking an admission-rejected pod during a real deploy.
+    # Step 2 of 2: enforce is now on. Step 1 (audit+warn only) ran clean
+    # through real pod recreation for every workload in this namespace -
+    # api, minio, the bucket-creation hook Job, and twice for CNPG's
+    # operator-managed pods (including two live primary failovers) - with
+    # zero PodSecurity violations logged, before this was flipped on.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
