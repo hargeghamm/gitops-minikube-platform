@@ -5,6 +5,17 @@
 #    against the apiserver, not through a sidecar
 #  - each other, for streaming replication
 #  - MinIO, for WAL archiving and base backups via barman-cloud
+#
+# The apiserver rule targets the control-plane node's real IP:port
+# (192.168.49.2:8443 on this minikube profile), not the "kubernetes" Service's
+# ClusterIP (10.96.0.1:443). Calico enforces egress policy against the
+# post-DNAT destination: kube-proxy rewrites the packet's destination from
+# the Service's ClusterIP to the actual apiserver endpoint (a hostNetwork
+# static pod here) in the nat table before Calico's filter-table policy check
+# ever sees it, so an ipBlock keyed to the ClusterIP silently never matches.
+# This is minikube-specific and not portable - a real cluster fronts the
+# apiserver with a stable VIP/LB, and that's what this rule would target
+# instead. Verified against this cluster's actual endpoint, not assumed.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -19,10 +30,10 @@ spec:
   egress:
     - to:
         - ipBlock:
-            cidr: 10.96.0.1/32
+            cidr: 192.168.49.2/32
       ports:
         - protocol: TCP
-          port: 443
+          port: 8443
     - to:
         - podSelector:
             matchLabels:
