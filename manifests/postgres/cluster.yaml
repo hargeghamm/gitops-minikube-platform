@@ -14,8 +14,15 @@ spec:
       secret:
         name: postgres-owner-credentials
 
+  # minikube's default StorageClass ("standard", the legacy hostpath
+  # provisioner) doesn't apply fsGroup ownership to its volumes - Kubernetes
+  # explicitly exempts the HostPath volume type from fsGroup enforcement, so
+  # CNPG's non-root postgres container gets "Permission denied" writing to a
+  # PVC on it. csi-hostpath-driver is a real CSI implementation and handles
+  # fsGroup correctly.
   storage:
     size: 1Gi
+    storageClass: csi-hostpath-sc
 
   resources:
     requests:
