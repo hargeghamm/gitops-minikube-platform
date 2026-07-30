@@ -1,8 +1,5 @@
-# Runs once per sync as an ArgoCD hook, after MinIO is healthy, to create the
-# bucket CloudNativePG backs up into. MinIO doesn't auto-create buckets on
-# first write, so something has to. Modeled as a PostSync hook rather than a
-# tracked resource: it's a one-shot action, not desired state, and HookSucceeded
-# means ArgoCD cleans it up instead of it lingering as a completed Job forever.
+# PostSync hook: creates the backup bucket (minio doesn't auto-create one).
+# One-shot, not desired state - HookSucceeded prunes it after it runs.
 apiVersion: batch/v1
 kind: Job
 metadata:

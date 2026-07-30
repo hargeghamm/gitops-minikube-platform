@@ -24,9 +24,7 @@ spec:
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
     spec:
-      # this pod never talks to the Kubernetes API - no reason to hand a
-      # service account token to a compromised container to try to use
-      automountServiceAccountToken: false
+      automountServiceAccountToken: false # no k8s API calls needed
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

@@ -4,11 +4,7 @@ metadata:
   name: app
   labels:
     name: app
-    # Step 2 of 2: enforce is now on. Step 1 (audit+warn only) ran clean
-    # through real pod recreation for every workload in this namespace -
-    # api, minio, the bucket-creation hook Job, and twice for CNPG's
-    # operator-managed pods (including two live primary failovers) - with
-    # zero PodSecurity violations logged, before this was flipped on.
+    # audit+warn verified clean (incl. 2 live CNPG failovers) before enforce went on
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/audit: restricted

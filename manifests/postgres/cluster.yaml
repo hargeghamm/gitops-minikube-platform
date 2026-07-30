@@ -14,12 +14,8 @@ spec:
       secret:
         name: postgres-owner-credentials
 
-  # minikube's default StorageClass ("standard", the legacy hostpath
-  # provisioner) doesn't apply fsGroup ownership to its volumes - Kubernetes
-  # explicitly exempts the HostPath volume type from fsGroup enforcement, so
-  # CNPG's non-root postgres container gets "Permission denied" writing to a
-  # PVC on it. csi-hostpath-driver is a real CSI implementation and handles
-  # fsGroup correctly.
+  # standard's hostpath provisioner ignores fsGroup -> initdb permission denied.
+  # csi-hostpath-driver is a real CSI and handles it correctly.
   storage:
     size: 1Gi
     storageClass: csi-hostpath-sc
@@ -55,12 +51,7 @@ metadata:
   name: postgres-nightly
   namespace: app
 spec:
-  # CNPG's schedule is NOT standard 5-field Kubernetes CronJob syntax - it's
-  # robfig/cron format with a leading seconds field (sec min hour dom month
-  # dow). A 5-field "0 2 * * *" here doesn't mean "2am daily": it gets parsed
-  # as sec=0 min=2 hour=* ..., i.e. every hour at :02:00. Confirmed by
-  # actually seeing a Backup fire at 17:02 instead of 02:00 - not caught by
-  # reading the docs, caught by checking what actually ran.
+  # 6-field robfig/cron (sec min hour dom month dow), not 5-field CronJob syntax
   schedule: "0 0 2 * * *"
   backupOwnerReference: self
   cluster:

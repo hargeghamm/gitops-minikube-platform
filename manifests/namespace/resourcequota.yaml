@@ -1,22 +1,7 @@
-# Sized against the actual worst-case simultaneous footprint of everything
-# that can run in this namespace at once, with headroom - not a round number
-# picked at random:
-#
-#   component          replicas (max)   requests (cpu/mem)   limits (cpu/mem)
-#   api                6 (5 HPA + 1      6x 50m/32Mi          6x 200m/128Mi
-#                      rollout surge)    = 300m/192Mi         = 1200m/768Mi
-#   postgres (CNPG)    2                 2x 100m/256Mi        2x 500m/512Mi
-#                                        = 200m/512Mi         = 1000m/1024Mi
-#   minio              1                 50m/128Mi            250m/256Mi
-#   minio-bucket-job   1 (transient)     10m/16Mi             100m/64Mi
-#   -------------------------------------------------------------------------
-#   worst-case total                     560m/848Mi           2550m/2112Mi
-#
-# Quota below leaves headroom over that worst case, but not evenly: ~1.8x on
-# requests.cpu, ~1.4x on both memory dimensions, and only ~1.2x on
-# limits.cpu - that last one is the tightest margin and the one to widen
-# first if anything else ever needs to run in this namespace (a debug pod,
-# a one-off Job) while the HPA and a rollout are both maxed out at once.
+# Sized against worst-case simultaneous usage: api at HPA max (5) + 1 rollout
+# surge, both CNPG instances, minio, bucket-job. Worst case ~560m/848Mi
+# requests, ~2550m/2112Mi limits. Headroom: ~1.8x requests.cpu, ~1.4x memory,
+# ~1.2x limits.cpu (tightest - widen first if needed).
 apiVersion: v1
 kind: ResourceQuota
 metadata:

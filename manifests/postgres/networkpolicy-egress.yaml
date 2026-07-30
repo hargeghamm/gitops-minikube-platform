@@ -1,21 +1,10 @@
-# Egress the CNPG-managed Postgres pods need beyond DNS (DNS is covered
-# namespace-wide by manifests/api/networkpolicy-dns-egress.yaml):
-#  - the Kubernetes API server, because each instance's manager reports
-#    cluster/replication status and participates in leader election directly
-#    against the apiserver, not through a sidecar
-#  - each other, for streaming replication
-#  - MinIO, for WAL archiving and base backups via barman-cloud
+# Beyond DNS (covered namespace-wide elsewhere): apiserver (status/leader
+# election), peer instances (replication), minio (WAL/backups).
 #
-# The apiserver rule targets the control-plane node's real IP:port
-# (192.168.49.2:8443 on this minikube profile), not the "kubernetes" Service's
-# ClusterIP (10.96.0.1:443). Calico enforces egress policy against the
-# post-DNAT destination: kube-proxy rewrites the packet's destination from
-# the Service's ClusterIP to the actual apiserver endpoint (a hostNetwork
-# static pod here) in the nat table before Calico's filter-table policy check
-# ever sees it, so an ipBlock keyed to the ClusterIP silently never matches.
-# This is minikube-specific and not portable - a real cluster fronts the
-# apiserver with a stable VIP/LB, and that's what this rule would target
-# instead. Verified against this cluster's actual endpoint, not assumed.
+# apiserver target is the control-plane node's real IP:port, not the
+# "kubernetes" Service ClusterIP - kube-proxy DNATs before Calico's filter
+# table sees the packet, so an ipBlock on the ClusterIP never matches.
+# minikube-specific; a real cluster would target its apiserver VIP/LB instead.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

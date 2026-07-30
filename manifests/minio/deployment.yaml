@@ -17,8 +17,7 @@ spec:
       labels:
         app: minio
     spec:
-      # this pod never talks to the Kubernetes API
-      automountServiceAccountToken: false
+      automountServiceAccountToken: false # no k8s API calls needed
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -71,9 +70,7 @@ metadata:
   name: minio-data
   namespace: app
 spec:
-  # standard's hostpath provisioner doesn't honor fsGroup (see the storage ADR
-  # in the writeup) - needed here now that MinIO runs as a non-root UID
-  storageClassName: csi-hostpath-sc
+  storageClassName: csi-hostpath-sc # standard's hostpath ignores fsGroup
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:

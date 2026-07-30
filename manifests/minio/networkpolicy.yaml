@@ -21,9 +21,7 @@ spec:
         - protocol: TCP
           port: 9000
 ---
-# egress side: pods that need to reach MinIO must also be allowed to leave -
-# default-deny blocks both directions independently, so the ingress rule
-# above alone isn't enough
+# egress side needed too - default-deny blocks both directions independently
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
