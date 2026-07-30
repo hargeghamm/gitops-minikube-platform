@@ -27,13 +27,13 @@ spec:
       automountServiceAccountToken: false # no k8s API calls needed
       securityContext:
         runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
+        runAsUser: 10001 # matches appuser in the provided Dockerfile
+        runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: api
-          image: qoves-api:1.0.0
+          image: qoves-api:2.0.0
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -49,6 +49,9 @@ spec:
                 secretKeyRef:
                   name: api-db-credentials
                   key: DATABASE_URL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp # gunicorn's worker heartbeat file needs a writable tmpdir
           resources:
             requests:
               cpu: 50m
@@ -68,3 +71,6 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 20
+      volumes:
+        - name: tmp
+          emptyDir: {}

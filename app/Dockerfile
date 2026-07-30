@@ -1,13 +1,16 @@
-# syntax=docker/dockerfile:1
-FROM golang@sha256:6f73a1b8b608dad4866b9f746ac6888ffdb112f75ef59ed97c43b5f734368718 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY main.go ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api .
+# Pin the base image. Candidates: pin YOUR built image too (tag or digest), never :latest.
+FROM python:3.12.4-slim-bookworm
 
-FROM gcr.io/distroless/static-debian12@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
-COPY --from=build /out/api /api
-USER nonroot:nonroot
+RUN useradd --create-home --uid 10001 appuser
+WORKDIR /app
+
+# Install deps first so this layer caches across code changes.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+
+USER appuser
 EXPOSE 8080
-ENTRYPOINT ["/api"]
+# gunicorn (not the Flask dev server); 2 workers is plenty for this tiny API.
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "main:app"]
