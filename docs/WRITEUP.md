@@ -241,6 +241,54 @@ a working, submission-ready cluster to close it. On a real cluster - or a
 disposable throwaway profile - I'd do it and prove it with a fresh
 `etcdctl` read showing ciphertext.
 
+**Encryption in transit, API to Postgres: found disabled, fixed to
+verified TLS.** A dedicated security pass over the whole stack turned up
+something I'd carried forward unexamined since the raw-StatefulSet days:
+`DATABASE_URL` had `sslmode=disable` baked in, meaning every query between
+the API and Postgres travelled in plaintext on the wire - inside the
+cluster network, but still plaintext, and still a real thing to check
+rather than assume is fine because it's "internal." What made this an easy,
+low-risk fix rather than a bigger project: CloudNativePG already
+provisions a complete TLS PKI for the cluster by default (a CA plus a
+server certificate covering every `postgres-*` service DNS name, and
+mutually-authenticated client certificates for streaming replication
+between instances - I found this by inspecting the actual generated
+`pg_hba.conf` and `postgresql.conf` inside the running pod, not by reading
+CNPG's docs and assuming). The server was already fully capable of
+encrypted, verified connections; nothing was consuming it. The fix: mount
+the CNPG-managed CA secret into the API pod and switch `DATABASE_URL` to
+`sslmode=verify-full` - encrypted *and* hostname-verified against the
+actual CA, not just "encrypted to something claiming to be the right
+server." I confirmed this is genuinely active, not just configured: I ran
+`SHOW ssl` against the exact connection the API uses and got `on`, and
+separately confirmed `/healthz` still returns 200 - which it would only do
+if `psycopg` successfully completed the TLS handshake and certificate
+verification, since a verify-full failure raises an exception the endpoint
+would surface as a 503 (I'd already seen that exact failure mode locally
+while testing the container, so I know what it looks like). One thing
+worth being honest about: replication traffic between CNPG's own primary
+and replica was *already* using mutual TLS by default, entirely CNPG's
+doing - the gap was specifically in the one connection string I authored
+myself.
+
+**RBAC review across every controller, not just the one I already fixed.**
+I'd already scoped Prometheus's own RBAC down from a cluster-wide
+`ClusterRole` to a namespaced `Role` (covered above). This pass, I checked
+the *other* controllers' RBAC too: the Sealed Secrets controller's
+`ClusterRole` genuinely does need `get/list/create/update/delete` on
+`secrets` cluster-wide (confirmed by reading the full rule set, not the
+truncated summary I glanced at first) - that's inherent to what the
+controller has to do, not a misconfiguration, and matches what I'd already
+written about it being a high-value target by design. CNPG's operator
+`ClusterRole` is similarly broad (pods/exec, node reads, the ability to
+create ServiceAccounts/Roles/RoleBindings) because it needs all of that to
+run backup commands inside instances, schedule with topology awareness,
+and provision per-cluster identities. Both are upstream-authored,
+necessary for the controller to function, and not something I should
+rewrite - the same judgment call as not touching ArgoCD's own install
+manifest. Nothing to fix here; worth having actually checked rather than
+assumed.
+
 **Postgres: CloudNativePG, not a raw StatefulSet.**
 I started with a raw StatefulSet - the simplest thing that satisfies "state
 survives a restart" - and it worked. But "survives a pod restart" and "survives
@@ -421,7 +469,12 @@ these gaps:
    apiserver's static pod manifest this late - a judgment call, not an
    oversight, and the first thing I'd do differently starting fresh (bake
    `--encryption-provider-config` into cluster bring-up from the start,
-   rather than retrofit it).
+   rather than retrofit it). Same reasoning, same fix category: Kubernetes
+   API audit logging is also off on this cluster (confirmed by checking the
+   apiserver's static pod manifest directly, not assumed) - no record of
+   who did what against the API server. Both are apiserver-flag changes I'd
+   bake in at cluster bring-up on a real deployment rather than retrofit
+   onto a running one.
 4. **No upgrade story.** I pinned Kubernetes, Calico, ArgoCD, CloudNativePG,
    and every image by tag or digest, but there's no tested path for rolling
    any of those forward - no staging cluster to validate a Kubernetes minor
@@ -434,10 +487,24 @@ these gaps:
    watching CNPG's own failover events specifically (see Runbook - this is
    the most concrete near-term fix). Fine for this exercise; not fine for
    anything with an on-call rotation.
-7. **Supply chain is unverified.** Images are pinned by tag/digest but
-   nothing stops an unsigned or untrusted image from running - no admission
-   policy, no image signing/verification (cosign + Kyverno/OPA Gatekeeper
-   would close this).
+7. **Supply chain is unverified, and I have real numbers on why that
+   matters, not just the theoretical concern.** Images are pinned by
+   tag/digest but nothing stops an unsigned or untrusted image from running -
+   no admission policy, no image signing/verification (cosign +
+   Kyverno/OPA Gatekeeper would close that half of it). The other half is
+   what's actually *in* the pinned images: I ran `trivy image` against all
+   four I control the base image for and got real CRITICAL/HIGH counts, not
+   a guess - `qoves-api` (python:3.12.4-slim-bookworm base): 12 critical, 69
+   high; MinIO: 4 critical, 85 high; Prometheus: 6 critical, 80 high; CNPG's
+   Postgres image: 34 critical, 233 high. Pinning a digest guarantees
+   *reproducibility*, not *safety* - a digest-pinned image is exactly as
+   vulnerable today as it was the day I pinned it, and none of these numbers
+   go down until I bump the tag. I didn't change `app/Dockerfile`'s base
+   image - it's the assignment's exact provided file and the app itself
+   isn't scored - but for the three images that are my own choice, this is
+   the concrete argument for a scheduled base-image bump, not just "keep
+   pins fresh" as an abstract idea. A real deployment wires `trivy` (or
+   equivalent) into CI as a merge gate, not a one-off manual check like this.
 
 ## 5. Chaos: killing the primary, twice, under a live connection
 
