@@ -673,6 +673,26 @@ contrived example:
     correctly." The fix was deleting and letting the `calico-node` DaemonSet
     pod on that node restart, which cleared whatever stale connection state
     it was holding.
+14. **My own security hardening pass missed a workload, because it lives in
+    a different namespace than the one I was focused on.** I'd hardened
+    every workload's `securityContext` and rolled out PSS enforcement for
+    the `app` namespace, and considered the pass complete. A later,
+    dedicated "check everything again" review caught that Prometheus - in
+    the `monitoring` namespace, not `app` - had no `securityContext` at all,
+    and `monitoring` had no PSS labels whatsoever. It was already running
+    non-root (`uid 65534`, the image's own default), so nothing was actively
+    broken, but nothing at the cluster layer would have caught it if that
+    default ever changed - the exact same class of gap I'd already found
+    and fixed for the API and MinIO, just in a namespace I hadn't
+    re-checked. Fixed the same way: tested `readOnlyRootFilesystem` locally
+    first (found it needs `fsGroup` set for its `emptyDir` to be writable
+    by the non-root UID, confirmed by reproducing the failure with `docker
+    run` before touching the cluster), then rolled `monitoring` through the
+    same safe audit+warn-then-enforce PSS sequence, verified via a real pod
+    recreation each time. The lesson: a security pass scoped to "the
+    namespace I've been working in" isn't a security pass over the whole
+    cluster - worth explicitly re-checking every namespace, not just the
+    one most recently touched.
 
 **Not a bug I fixed, but worth understanding since it's now code I have to
 defend too:** the provided app runs gunicorn with `--workers 2`, and
