@@ -1,5 +1,5 @@
 *.pem
 *.key
-/app/app
-/app/api
+__pycache__/
+*.pyc
 .DS_Store

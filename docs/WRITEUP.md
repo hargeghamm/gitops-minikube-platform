@@ -9,7 +9,7 @@ version of this project includes the things that didn't work on the first try.
 ### Prerequisites
 
 - macOS with Homebrew, or any machine with `docker`/`colima`, `minikube`,
-  `kubectl`, `kubeseal`, and `go` (only needed to rebuild the API image).
+  `kubectl`, and `kubeseal`.
 - A container runtime for minikube's `docker` driver. On Apple Silicon there's
   no Docker daemon by default, so I run one via Colima
   (`brew install colima docker`, then `colima start`).
@@ -38,8 +38,8 @@ kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/
 
 # 4. Build and load the API image (no registry in this exercise, so the image
 #    is built locally and loaded straight into both nodes' container runtimes)
-cd app && docker build -t qoves-api:1.0.0 . && cd ..
-minikube image load qoves-api:1.0.0 -p qoves
+cd app && docker build -t qoves-api:2.0.0 . && cd ..
+minikube image load qoves-api:2.0.0 -p qoves
 
 # 5. Seal the credentials this stack needs against the running controller's
 #    public key (see manifests/*/sealedsecret*.yaml - this step only needs to
@@ -184,8 +184,8 @@ work") surfaced a real finding: MinIO was running as **root** (`uid=0`) - the
 official image's default, which I hadn't overridden because I'd only verified
 functionality, not the container's actual identity. Neither the API nor MinIO
 Deployment had any Kubernetes-level `securityContext` at all; the API's
-non-root behavior existed only because the Dockerfile happens to set `USER
-nonroot`, with nothing at the cluster layer to catch a regression if that
+non-root behavior existed only because the Dockerfile happens to set a `USER`
+directive, with nothing at the cluster layer to catch a regression if that
 ever changed. I fixed both: explicit `runAsNonRoot`, a specific `runAsUser`,
 `allowPrivilegeEscalation: false`, dropped `ALL` capabilities, and
 `seccompProfile: RuntimeDefault` on api, minio, and the bucket-creation hook
@@ -556,7 +556,7 @@ contrived example:
     MinIO functionally (backups worked, restore worked) and never checked
     what user it actually ran as. It was `uid=0`. Neither the API nor MinIO
     Deployment had any `securityContext` at all - the API only avoided this
-    because its distroless image's Dockerfile happens to set `USER nonroot`,
+    because the app image's Dockerfile happens to set a `USER` directive,
     which the cluster itself was doing nothing to enforce. Fixed by adding
     explicit `securityContext` to both plus the bucket-creation Job (see the
     security ADR above), which is exactly the kind of gap "it works" doesn't
@@ -579,6 +579,31 @@ contrived example:
     mid-flight while a previous operation is still resolving against it -
     and when ArgoCD's own operation state wedges, the reliable fix is
     recreating the `Application`, not chasing its cache.
+12. **`gunicorn` crashes immediately under `readOnlyRootFilesystem` with no
+    writable `/tmp`.** After the assignment brief was updated to specify the
+    exact app (Flask + gunicorn, replacing an app I'd written myself when no
+    template existed), I re-applied the same hardening pass to it and hit a
+    real crash: gunicorn's worker heartbeat mechanism (`WorkerTmp`) calls
+    `tempfile.mkstemp()` against `/tmp` on every worker boot, and with no
+    writable filesystem anywhere, that raises `FileNotFoundError: No usable
+    temporary directory found` before the process ever binds a port. I found
+    this by testing the exact container under `docker run --read-only`
+    locally before deploying, not by watching it fail in the cluster. Fixed
+    with a mounted `emptyDir` at `/tmp` - keeps the rest of the filesystem
+    read-only, gives gunicorn the one path it actually needs.
+13. **A CNI plugin can wedge on one node after a host sleep/restart, while
+    workloads already running on that node stay completely unaffected.**
+    After a Colima restart (see bug list context above), new pod creation on
+    one node started failing with `plugin type="calico" failed (add): error
+    getting ClusterInformation: connection is unauthorized` - but the pods
+    already running on that same node (Postgres, one API replica) kept
+    serving traffic the entire time, because an existing pod's network
+    sandbox doesn't need the CNI ADD path again. This is a sharp distinction
+    worth having internalized rather than assumed: "workloads on this node
+    are healthy" is not evidence that "this node can schedule new pods
+    correctly." The fix was deleting and letting the `calico-node` DaemonSet
+    pod on that node restart, which cleared whatever stale connection state
+    it was holding.
 
 ## 7. Runbook: the Postgres primary dies
 
