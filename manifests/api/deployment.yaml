@@ -52,6 +52,9 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp # gunicorn's worker heartbeat file needs a writable tmpdir
+            - name: postgres-ca
+              mountPath: /etc/postgres-ca
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -74,3 +77,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: postgres-ca
+          secret:
+            secretName: postgres-ca # CNPG-managed CA that signs postgres-rw's server cert
