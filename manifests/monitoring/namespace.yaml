@@ -4,3 +4,6 @@ metadata:
   name: monitoring
   labels:
     name: monitoring
+    # step 1 of 2: audit+warn only, verify clean via real pod recreation, then enforce
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
