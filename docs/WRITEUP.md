@@ -45,7 +45,9 @@ minikube image load qoves-api:2.0.0 -p qoves
 #    public key (see manifests/*/sealedsecret*.yaml - this step only needs to
 #    happen once; only ciphertext ever lands in git):
 #      - postgres-owner-credentials (the CNPG cluster's app-user bootstrap)
-#      - api-db-credentials (DATABASE_URL, built from the same password)
+#      - api-db-credentials (DATABASE_URL, built from the same password -
+#        note sslmode=verify-full&sslrootcert=/etc/postgres-ca/ca.crt, not
+#        sslmode=disable; see the TLS-in-transit ADR below for why)
 #      - minio-credentials (the backup object store's root credentials,
 #        reused by both MinIO's own container env and CNPG's s3Credentials)
 kubeseal --fetch-cert --controller-name=sealed-secrets-controller \
