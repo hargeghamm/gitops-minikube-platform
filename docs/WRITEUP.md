@@ -605,6 +605,26 @@ contrived example:
     pod on that node restart, which cleared whatever stale connection state
     it was holding.
 
+**Not a bug I fixed, but worth understanding since it's now code I have to
+defend too:** the provided app runs gunicorn with `--workers 2`, and
+`prometheus_client`'s default `Counter` registry is per-process. Gunicorn
+workers are separate OS processes with separate memory, and nothing in
+`main.py` wires up `prometheus_client`'s `multiprocess` module (the standard
+fix, which needs a shared `PROMETHEUS_MULTIPROC_DIR` and a different
+`generate_latest()` call). So `http_requests_total` in `/metrics` reflects
+whichever single worker process happened to handle that particular scrape
+request, not a true count across both workers - or across the 2 pod
+replicas, for that matter. I didn't try to force a clean live demonstration
+of this (routing a specific request to a specific worker from outside the
+pod isn't something curl gives you clean control over, and a flaky demo is
+worse than none), but it's well-documented `prometheus_client` behavior, not
+a guess. It doesn't affect my `APITargetDown` alert, which only depends on
+`up{job="api"}` - the scrape succeeding at all, not the accuracy of any
+metric inside it. I didn't touch `main.py` to fix this: it's the assignment's
+own provided file, verbatim, and "the app itself is not scored" - but I'd
+raise it unprompted in a walkthrough, because understanding a limitation in
+code I didn't write is exactly what "defend every line" is asking for.
+
 ## 7. Runbook: the Postgres primary dies
 
 This replaces the version of this runbook I'd have written against the raw
